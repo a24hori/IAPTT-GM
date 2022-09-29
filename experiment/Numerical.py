@@ -144,13 +144,16 @@ def main():
         for y in model_y.parameters():
             if y.grad is not None:
                 y.grad = None
+        # zero_grad() -> reset gradient
         x_opt.zero_grad()
         F_list = []
         f_list = []
         pmax=args.inner_loop
         start_time_task = time.time()
+        # `higher` library allows us to use the same model for inner and outer loop such as meta-learning
         with higher.innerloop_ctx(model_y, y_opt, copy_initial_weights=False) as (fmodel, f_opt):
             forward_time_task = time.time()
+            # follower's inner loop (Alg. 1 line 4--9)
             for iter in range(args.inner_loop):
                 loss_inner = fmodel(model_x.toy_x)
 
@@ -161,23 +164,33 @@ def main():
                     with torch.no_grad():
                         loss_outer = model_x(fmodel.toy_y)
                         F_list.append(loss_outer.detach())
+            # Pessimistic Trajectory Truncation (Alg. 1 line 9)
             if len(pmax_load) > 0:
                 pmax=pmax_load[meta_iter]
             else:
                 pmax = F_list.index(max(F_list))
+            print(pmax+1) # Check argmax
+            
             forward_time_task = time.time() - forward_time_task
             forward_time += forward_time_task
             backward_time_task = time.time()
+
+            # Computing the pessimistic response y_{\bar{k}}(x,z)
             params = fmodel.parameters(time=pmax+1)
             y_new = next(params)
             y_new_log = y_new.detach()
             y_final_log = next(fmodel.parameters(args.inner_loop)).detach()
+
+            # UL updating (Alg. 1 line 11)
             x_log = model_x.parameters()
             x_log = next(x_log).detach()
-            F_loss = model_x(y_new)
+            F_loss = model_x(y_new) 
+
+            # Hypergradient by autograd
             grad_y_init = torch.autograd.grad(F_loss, fmodel.parameters(time=0), retain_graph=True,
-                                              allow_unused=True)
-            grad_x_init = torch.autograd.grad(F_loss, model_x.parameters(), retain_graph=True)
+                                              allow_unused=True) # \nabla_z F(x,y_{\bar{k}}(x,z)) for line 13?
+            grad_x_init = torch.autograd.grad(F_loss, model_x.parameters() # Total diff w.r.t. x
+                            , retain_graph=True) # \nabla_x F(x,y_{\bar{k}}(x,z)) for line 11?
             for p, x in zip(grad_x_init, model_x.parameters()):
                 if x.grad == None:
                     x.grad = p
@@ -188,13 +201,16 @@ def main():
                     y.grad = p
                 else:
                     y.grad += p
-        y_init_opt.step()
-        x_opt.step()
+        # Initialization Updating with y_{\bar{k}}(x,z) (Alg. 1 line 13?)
+        y_init_opt.step() # learning step -> y_t - lr * grad_y_t
+        # UL Updating with y_{\bar{k}}(x,z) (Alg. 1 line 11)
+        x_opt.step() # learning step -> x_t - lr * grad_x_t
+        
         backward_time_task = time.time() - backward_time_task
         backward_time += backward_time_task
         total_time_iter = time.time() - start_time_task
         # x_lr_schedular.step()
-        with torch.no_grad():
+        with torch.no_grad(): # clamp -> projection onto the constraint set
             for x in model_x.parameters():
                 x.clamp_(1, 10)
             for y in model_y.parameters():
