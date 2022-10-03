@@ -169,7 +169,6 @@ def main():
                 pmax=pmax_load[meta_iter]
             else:
                 pmax = F_list.index(max(F_list))
-            print(pmax+1) # Check argmax
             
             forward_time_task = time.time() - forward_time_task
             forward_time += forward_time_task

@@ -18,7 +18,7 @@ parser.add_argument('--outer_loop', type=int, default=500, help="outer loop")
 parser.add_argument('--inner_loop', type=int, default=40, help="inner loop")
 parser.add_argument('--K', type=int, default=60, help="for CG")
 parser.add_argument('--learning_rate', type=float, default=0.0005, help="learning rate for inner training steps")
-parser.add_argument('--meta_learning_rate', type=float, default=0.05, help="learning rate for outer training steps")
+parser.add_argument('--meta_learning_rate', type=float, default=0.10, help="learning rate for outer training steps")
 parser.add_argument('--min_learning_rate', type=float, default=0.01, help="learning rate for inner training steps")
 parser.add_argument('--x0', type=float, default=1, help="init x")
 parser.add_argument('--y0', type=float, default=2, help="init y")
@@ -174,12 +174,16 @@ def main():
                 pmax=pmax_load[meta_iter]
             else:
                 pmax = F_list.index(max(F_list))
+            print(F_list)
+            print(pmax)
             # Optimistic Trajectory Truncation (Alg. 1 line 9+)
             if len(omin_load) > 0:
                 omin=omin_load[meta_iter]
             else:
                 omin = F_list.index(min(F_list))
-            
+            print(omin)
+            input() 
+
             forward_time_task = time.time() - forward_time_task
             forward_time += forward_time_task
             backward_time_task = time.time()
@@ -187,17 +191,19 @@ def main():
             # Computing the pessimistic response y_{\bar{k}}(x,z)
             params = fmodel.parameters(time=pmax+1)
             y_new = next(params)
+            y_newOpt = next(fmodel.parameters(time=omin+1))
             y_new_log = y_new.detach()
             y_final_log = next(fmodel.parameters(args.inner_loop)).detach()
 
             # UL updating (Alg. 1 line 11)
             x_log = model_x.parameters()
             x_log = next(x_log).detach()
-            print(f"before learning: {x_log.numpy()}")
-            F_loss = model_x(next(fmodel.parameters(time=omin))) 
+            print(f"before learning (previous point): {x_log.numpy()}")
+            F_loss = model_x(y_new) 
+            F_lossOpt = model_x(y_newOpt)
 
             # Hypergradient by autograd
-            grad_y_init = torch.autograd.grad(-F_loss, fmodel.parameters(time=pmax+1), retain_graph=True,
+            grad_y_init = torch.autograd.grad(-F_lossOpt, fmodel.parameters(time=omin), retain_graph=True,
                                               allow_unused=True) # \nabla_z F(x,y_{\bar{k}}(x,z)) for line 13?
             grad_x_init = torch.autograd.grad(F_loss, model_x.parameters() # Total diff w.r.t. x
                             , retain_graph=True) # \nabla_x F(x,y_{\bar{k}}(x,z)) for line 11?
@@ -216,9 +222,11 @@ def main():
         # UL Updating with y_{\bar{k}}(x,z) (Alg. 1 line 11)
         x_opt.step() # learning step -> x_t - lr * grad_x_t
         print(f"after learning :{x_log.numpy()}")
+
         backward_time_task = time.time() - backward_time_task
         backward_time += backward_time_task
         total_time_iter = time.time() - start_time_task
+
         # x_lr_schedular.step()
         with torch.no_grad(): # clamp -> projection onto the constraint set
             for x in model_x.parameters():
